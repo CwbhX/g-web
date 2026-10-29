@@ -359,8 +359,6 @@ async function openHidppDevice(device: Hidpp) {
       }
     } catch (e) { console.log(e); }
 
-    const zoneEffects: (() => RgbEffect)[] = [];
-
     const details = document.createElement('details');
     details.open = true;
     container.appendChild(details);
@@ -368,6 +366,45 @@ async function openHidppDevice(device: Hidpp) {
     const summary = document.createElement('summary');
     summary.textContent = 'Lighting';
     details.appendChild(summary);
+
+    const syncLabel = document.createElement('label');
+    const sync = document.createElement('input');
+    sync.type = 'checkbox';
+    sync.checked = zones.length > 1 && zones.every(zone =>
+      JSON.stringify(savedEffects[zone.index]) === JSON.stringify(savedEffects[zones[0].index]));
+    syncLabel.append(sync, ' Sync zones');
+    if (zones.length > 1) {
+      details.appendChild(syncLabel);
+    }
+
+    const rows: {
+      enabled: HTMLInputElement;
+      select: HTMLSelectElement;
+      color: HTMLInputElement;
+      period: HTMLInputElement;
+      intensity: HTMLInputElement;
+      buildEffect: () => RgbEffect;
+      updateVisibility: () => void;
+      queue: () => void;
+    }[] = [];
+
+    const copyRow = (source: typeof rows[number], target: typeof rows[number]) => {
+      target.enabled.checked = source.enabled.checked;
+      if (Array.from(target.select.options).some(option => option.value === source.select.value)) {
+        target.select.value = source.select.value;
+      }
+      target.color.value = source.color.value;
+      target.period.value = source.period.value;
+      target.intensity.value = source.intensity.value;
+      target.updateVisibility();
+    };
+
+    sync.onchange = () => {
+      if (sync.checked) {
+        rows.slice(1).forEach(row => copyRow(rows[0], row));
+        rows.forEach(row => row.queue());
+      }
+    };
 
     for (const zone of zones) {
       const div = document.createElement('div');
@@ -454,16 +491,30 @@ async function openHidppDevice(device: Hidpp) {
         queueChange(div, () => rgbEffects.setZoneEffect(zone, effect));
         if (profileAddress !== undefined) {
           const address = profileAddress;
-          const effects = zoneEffects.map(build => build());
+          const effects = rows.map(row => row.buildEffect());
           queueChange(details, () => onBoardProfile.writeProfileLeds(address, effects));
         }
       };
-      zoneEffects.push(buildEffect);
-      enabled.onchange = queue;
-      select.onchange = queue;
-      color.oninput = queue;
-      period.oninput = queue;
-      intensity.oninput = queue;
+      const row = { enabled, select, color, period, intensity, buildEffect, updateVisibility, queue };
+      rows.push(row);
+
+      const onEdit = () => {
+        if (!sync.checked) {
+          queue();
+          return;
+        }
+        for (const other of rows) {
+          if (other !== row) {
+            copyRow(row, other);
+          }
+        }
+        rows.forEach(row => row.queue());
+      };
+      enabled.onchange = onEdit;
+      select.onchange = onEdit;
+      color.oninput = onEdit;
+      period.oninput = onEdit;
+      intensity.oninput = onEdit;
 
       div.append(enabled, select, color, period, intensity);
       details.appendChild(div);
