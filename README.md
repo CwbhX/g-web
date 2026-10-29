@@ -6,6 +6,8 @@ G-Web is not an official product of Logitech.
 
 This is a fork of [yume-chan/g-web](https://github.com/yume-chan/g-web).
 
+![G-Web connected to a G703 LIGHTSPEED HERO](doc/screenshot.png)
+
 ## What this fork adds
 
 The upstream project can read device information, DPI, report rate and on-board profiles, but it can't touch lighting, and every dropdown writes to the device the moment you change it. This fork adds:
