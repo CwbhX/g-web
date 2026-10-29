@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-Hans-CN">
+<html lang="en">
 
 <head>
   <meta charset="UTF-8">
@@ -10,34 +10,188 @@
   <style>
     :root {
       color-scheme: light dark;
+      --accent: #00a8e8;
+      --muted: color-mix(in srgb, CanvasText 60%, transparent);
+      --border: color-mix(in srgb, CanvasText 15%, transparent);
       background: Canvas;
       color: CanvasText;
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      accent-color: var(--accent);
     }
 
-    details {
-      padding-left: 20px;
+    body {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 24px 16px 0;
     }
-  
-    details>summary {
-      margin-left: -20px;
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+    }
+
+    header p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    header button {
+      margin-left: auto;
+    }
+
+    button {
+      font: inherit;
+      padding: 6px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, CanvasText 6%, Canvas);
+      color: inherit;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    select,
+    input[type="number"] {
+      font: inherit;
+      padding: 2px 4px;
+    }
+
+    input[type="number"] {
+      width: 4.5em;
+    }
+
+    #empty-state {
+      color: var(--muted);
+      text-align: center;
+      padding: 48px 0;
+    }
+
+    #root:not(:empty)+#empty-state {
+      display: none;
+    }
+
+    .device {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+    }
+
+    .device h2 {
+      margin: 0;
+      font-size: 1.2rem;
+    }
+
+    .subtitle,
+    .hint {
+      color: var(--muted);
+    }
+
+    .section {
+      border-top: 1px solid var(--border);
+      margin-top: 16px;
+      padding-top: 12px;
+    }
+
+    .section h3,
+    .section>summary {
+      margin: 0 0 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    summary {
+      cursor: pointer;
+    }
+
+    details details {
+      margin: 4px 0 4px 16px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 9rem 1fr;
+      align-items: center;
+      gap: 12px;
+      min-height: 32px;
+    }
+
+    .row .label {
+      color: var(--muted);
+    }
+
+    .value {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+    }
+
+    .value label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .value label[hidden] {
+      display: none;
+    }
+
+    .feature {
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 0.85rem;
     }
 
     #apply-bar {
       position: sticky;
       bottom: 0;
-      margin-top: 16px;
-      padding: 8px 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 8px;
+      padding: 12px 0 16px;
       background: Canvas;
-      border-top: 1px solid GrayText;
+      border-top: 1px solid var(--border);
+    }
+
+    #apply-status {
+      color: var(--muted);
     }
   </style>
 </head>
 
 <body>
-  <button id="select-button">Select Device</button>
-  <div id="root"></div>
+  <header>
+    <div>
+      <h1>G Web</h1>
+      <p>Configure Logitech devices in your browser</p>
+    </div>
+    <button id="select-button">Connect device</button>
+  </header>
+  <main id="root"></main>
+  <p id="empty-state">No device connected. Click "Connect device" and choose your mouse.</p>
   <div id="apply-bar">
-    <button id="apply-button" disabled>Send to mouse</button>
+    <button id="apply-button" class="primary" disabled>Send to mouse</button>
     <span id="apply-status"></span>
   </div>
   <script type="module" src="./src/index.ts"></script>

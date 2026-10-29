@@ -1,8 +1,63 @@
 import { AdjustableDpi, Battery, BatteryLevel1004, OnBoardProfile, BatteryStatus1000, BatteryStatus1001, BatteryStatus1f20, DeviceType, FeatureSet, FirmwareInfo, FirmwareType, Hidpp, isHidppDevice, Receiver, ReportRate, requestDevice, TypeAndName, OnBoardProfileMode, RgbEffect, RgbEffectId, RgbEffects, RgbZoneLocation } from "@yume-chan/hidpp";
 
-const root = document.getElementById('root') as HTMLDivElement;
+const root = document.getElementById('root') as HTMLElement;
 
 const devices: HIDDevice[] = [];
+
+const EFFECT_LABELS: Partial<Record<RgbEffectId, string>> = {
+  [RgbEffectId.Static]: 'Static',
+  [RgbEffectId.Cycle]: 'Color cycle',
+  [RgbEffectId.Breathing]: 'Breathing',
+};
+
+/** Turns enum names like `ChargingComplete` into `Charging complete` */
+function humanize(name: string | undefined) {
+  if (!name) {
+    return 'Unknown';
+  }
+  const spaced = name.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string) {
+  const result = document.createElement(tag);
+  if (className) {
+    result.className = className;
+  }
+  if (text !== undefined) {
+    result.textContent = text;
+  }
+  return result;
+}
+
+function addSection(parent: HTMLElement, title: string) {
+  const section = element('section', 'section');
+  section.append(element('h3', undefined, title));
+  parent.append(section);
+  return section;
+}
+
+function addRow(parent: HTMLElement, label: string, ...content: (Node | string)[]) {
+  const row = element('div', 'row');
+  const value = element('div', 'value');
+  value.append(...content);
+  row.append(element('span', 'label', label), value);
+  parent.append(row);
+  return row;
+}
+
+function labeled(text: string, control: HTMLElement, suffix?: string) {
+  const label = element('label');
+  label.append(text, control);
+  if (suffix) {
+    label.append(suffix);
+  }
+  return label;
+}
+
+function formatReportRate(ms: number) {
+  return `${Math.round(1000 / ms)} Hz`;
+}
 
 // Keyed by control, so changing the same control twice only sends the latest value
 const pendingChanges = new Map<HTMLElement, () => Promise<void>>();
@@ -16,20 +71,17 @@ function updateApplyButton() {
     }
   }
   applyButton.disabled = pendingChanges.size === 0;
-  applyButton.textContent = pendingChanges.size
-    ? `Send to mouse (${pendingChanges.size} pending)`
-    : 'Send to mouse';
 }
 
 function queueChange(control: HTMLElement, apply: () => Promise<void>) {
   pendingChanges.set(control, apply);
-  applyStatus.textContent = '';
   updateApplyButton();
+  applyStatus.textContent = `${pendingChanges.size} unsent ${pendingChanges.size === 1 ? 'change' : 'changes'}`;
 }
 
 applyButton.onclick = async () => {
   applyButton.disabled = true;
-  applyStatus.textContent = 'Sending...';
+  applyStatus.textContent = 'Sending…';
   let failed = 0;
   for (const [control, apply] of Array.from(pendingChanges)) {
     try {
@@ -40,7 +92,9 @@ applyButton.onclick = async () => {
       failed += 1;
     }
   }
-  applyStatus.textContent = failed ? `${failed} change(s) failed, see console` : 'Sent';
+  applyStatus.textContent = failed
+    ? `${failed} ${failed === 1 ? 'change' : 'changes'} failed, see the browser console for details`
+    : 'All changes sent';
   updateApplyButton();
 };
 
@@ -66,33 +120,42 @@ async function openHidppDevice(device: Hidpp) {
   // const friendlyName = new FriendlyName(device);
   // name.textContent = await friendlyName.getDefaultFriendlyName();
 
-  const container = document.createElement('div');
-  root.appendChild(container);
+  const card = element('article', 'device');
+  root.appendChild(card);
 
   device.onDisconnect(() => {
-    container.remove();
+    card.remove();
     updateApplyButton();
   });
 
+  const title = element('h2', undefined, 'Logitech device');
+  const subtitle = element('div', 'subtitle');
+  card.append(title, subtitle);
+  const connection = device.index === 0xff ? 'Connected directly' : `Connected via receiver (slot ${device.index})`;
+  subtitle.textContent = connection;
+
+  const statusRows = element('div', 'section');
+  card.append(statusRows);
+  const performance = addSection(card, 'Performance');
+  const lighting = addSection(card, 'Lighting');
+  const profiles = addSection(card, 'On-board profiles');
+  const info = element('details', 'section');
+  info.append(element('summary', undefined, 'Device info'));
+  const infoRows = element('div');
+  info.append(infoRows);
+  card.append(info);
+
   try {
     const typeAndName = new TypeAndName(device);
-    let div = document.createElement('div');
-    div.textContent = `${device.index} - ${await typeAndName.getName()}`;
-    container.appendChild(div);
-
-    div = document.createElement('div');
-    div.textContent = `Type: ${DeviceType[await typeAndName.getType()]}`;
-    container.appendChild(div);
+    title.textContent = await typeAndName.getName();
+    subtitle.textContent = `${humanize(DeviceType[await typeAndName.getType()])} · ${connection}`;
   } catch (e) { console.log(e); }
 
   try {
     const featureSet = new FeatureSet(device);
 
-    const details = document.createElement('details');
-    container.appendChild(details);
-
-    const summary = document.createElement('summary');
-    summary.textContent = 'Features';
+    const details = element('details');
+    const summary = element('summary', undefined, 'Supported HID++ features');
     details.appendChild(summary);
 
     let i = 0;
@@ -213,76 +276,60 @@ async function openHidppDevice(device: Hidpp) {
       if (feature.internal) {
         flags.push('internal');
       }
-      div.textContent = `Index 0x${i.toString(16).padStart(2, '0')}: ${id}${FEATURE_NAMES[id] ? ` ${FEATURE_NAMES[id]}` : ''}${flags.length ? ` (${flags.join(', ')})` : ''}`;
+      div.className = 'feature';
+      div.textContent = `${id} ${FEATURE_NAMES[id] ?? 'Unknown'}${flags.length ? ` (${flags.join(', ')})` : ''}`;
+      div.title = `Feature index 0x${i.toString(16).padStart(2, '0')}`;
       details.appendChild(div);
       i += 1;
     }
+    summary.textContent = `Supported HID++ features (${i})`;
+    info.append(details);
   } catch (e) { console.log(e); }
 
   try {
     const firmwareInfo = new FirmwareInfo(device);
     const deviceInfo = await firmwareInfo.getDeviceInfo();
-    console.error(deviceInfo);
-    for (let i = 0; i < deviceInfo.entityCount; i += 1) {
-      const firmware = await firmwareInfo.getFirmwareInfo(i);
-      const div = document.createElement('div');
-      div.textContent = [
-        `Firmware ${i}:`,
-        FirmwareType[firmware.type] ?? 'Unknown',
-        firmware.name,
-        `${firmware.major.toString(16)}.${firmware.minor.toString(16)}.${firmware.build.toString(16)}`,
-        firmware.active ? ' (active)' : '',
-        firmware.pid ? ` pid=${firmware.pid.toString(16).padStart(2, '0')}` : '',
-      ].filter(Boolean).join(' ');
-      container.appendChild(div);
-    }
+    console.log(deviceInfo);
 
     let serialNumber = deviceInfo.unitId.toString(16).padStart(8, '0');
     if (deviceInfo.supportSerialNumber) {
       serialNumber = await firmwareInfo.getSerialNumber();
     }
-    const div = document.createElement('div');
-    div.textContent = `Serial Number: ${serialNumber}`;
-    container.appendChild(div);
+    addRow(infoRows, 'Serial number', serialNumber);
+
+    for (let i = 0; i < deviceInfo.entityCount; i += 1) {
+      const firmware = await firmwareInfo.getFirmwareInfo(i);
+      const version = `${firmware.major.toString(16)}.${firmware.minor.toString(16)}.${firmware.build.toString(16)}`;
+      addRow(
+        infoRows,
+        humanize(FirmwareType[firmware.type]),
+        `${firmware.name} ${version}${firmware.active ? ' (active)' : ''}`
+      );
+    }
   } catch (e) { console.error(e); }
 
   try {
     const battery = new Battery(device);
-    const { level, nextLevel, status } = await battery.getBattery1000();
-    console.log('battery', level, nextLevel, status);
-
-    const div = document.createElement('div');
-    div.textContent = `Battery: about ${level}%, ${BatteryStatus1000[status]}`;
-    container.appendChild(div);
+    const { level, status } = await battery.getBattery1000();
+    addRow(statusRows, 'Battery', `${level}% · ${humanize(BatteryStatus1000[status])}`);
   } catch (e) { console.log(e); }
 
   try {
     const battery = new Battery(device);
     const { voltage, status } = await battery.getBattery1001();
-    console.log('battery', voltage, status);
-
-    const div = document.createElement('div');
-    div.textContent = `Battery: ${voltage}mV (~${Battery.mapVoltageToSoc(voltage)}%), ${BatteryStatus1001[status] ?? 'Discharging'}`;
-    container.appendChild(div);
+    addRow(statusRows, 'Battery', `About ${Battery.mapVoltageToSoc(voltage)}% (${voltage} mV) · ${BatteryStatus1001[status] ? humanize(BatteryStatus1001[status]) : 'Discharging'}`);
   } catch (e) { console.log(e); }
 
   try {
     const battery = new Battery(device);
     const { percentage, level, status } = await battery.getBattery1004();
-    console.log('battery', percentage, level, status);
-
-    const div = document.createElement('div');
-    div.textContent = `Battery: ${percentage ? `${percentage}%` : BatteryLevel1004[level]}, ${BatteryStatus1000[status]}`;
-    container.appendChild(div);
+    addRow(statusRows, 'Battery', `${percentage ? `${percentage}%` : humanize(BatteryLevel1004[level])} · ${humanize(BatteryStatus1000[status])}`);
   } catch (e) { console.log(e); }
 
   try {
     const battery = new Battery(device);
     const { voltage, status } = await battery.getBattery1f20();
-
-    const div = document.createElement('div');
-    div.textContent = `Battery: ${voltage}mV (~${Battery.mapVoltageToSoc(voltage)}%), ${BatteryStatus1f20[status]}`;
-    container.appendChild(div);
+    addRow(statusRows, 'Battery', `About ${Battery.mapVoltageToSoc(voltage)}% (${voltage} mV) · ${humanize(BatteryStatus1f20[status])}`);
   } catch (e) { console.log(e); }
 
   try {
@@ -295,14 +342,10 @@ async function openHidppDevice(device: Hidpp) {
       const dpiList = await dpi.getDpiList(index);
       const currentDpi = await dpi.getDpi(index);
 
-      const div = document.createElement('div');
-      div.textContent = `Sensor ${index} DPI: `;
-
-      const select = document.createElement('select');
+      const select = element('select');
       for (const value of dpiList) {
-        const option = document.createElement('option');
+        const option = element('option', undefined, value.toString());
         option.value = value.toString();
-        option.innerText = value.toString();
         select.appendChild(option);
       }
       select.value = currentDpi.toString();
@@ -311,8 +354,7 @@ async function openHidppDevice(device: Hidpp) {
         queueChange(select, async () => { await dpi.setDpi(index, value); });
       };
 
-      div.appendChild(select);
-      container.appendChild(div);
+      addRow(performance, sensorCount > 1 ? `Sensor ${index + 1} DPI` : 'DPI', select);
     }
   } catch (e) { console.log(e); }
 
@@ -321,14 +363,10 @@ async function openHidppDevice(device: Hidpp) {
     const reportRateList = await reportRate.getReportRateList();
     const currentReportRate = await reportRate.getReportRate();
 
-    const div = document.createElement('div');
-    div.textContent = 'Report Rate: ';
-
-    const select = document.createElement('select');
+    const select = element('select');
     for (const value of reportRateList) {
-      const option = document.createElement('option');
+      const option = element('option', undefined, formatReportRate(value));
       option.value = value.toString();
-      option.innerText = `${value}ms`;
       select.appendChild(option);
     }
     select.value = currentReportRate.toString();
@@ -337,8 +375,7 @@ async function openHidppDevice(device: Hidpp) {
       queueChange(select, () => reportRate.setReportRate(value));
     };
 
-    div.appendChild(select);
-    container.appendChild(div);
+    addRow(performance, 'Report rate', select);
   } catch (e) { console.log(e); }
 
   try {
@@ -359,22 +396,12 @@ async function openHidppDevice(device: Hidpp) {
       }
     } catch (e) { console.log(e); }
 
-    const details = document.createElement('details');
-    details.open = true;
-    container.appendChild(details);
-
-    const summary = document.createElement('summary');
-    summary.textContent = 'Lighting';
-    details.appendChild(summary);
-
-    const syncLabel = document.createElement('label');
-    const sync = document.createElement('input');
+    const sync = element('input');
     sync.type = 'checkbox';
     sync.checked = zones.length > 1 && zones.every(zone =>
       JSON.stringify(savedEffects[zone.index]) === JSON.stringify(savedEffects[zones[0].index]));
-    syncLabel.append(sync, ' Sync zones');
     if (zones.length > 1) {
-      details.appendChild(syncLabel);
+      addRow(lighting, 'Sync zones', labeled('', sync, 'Use the same lighting on every zone'));
     }
 
     const rows: {
@@ -407,42 +434,44 @@ async function openHidppDevice(device: Hidpp) {
     };
 
     for (const zone of zones) {
-      const div = document.createElement('div');
-      div.append(`${RgbZoneLocation[zone.location] ?? `Zone ${zone.index}`}: `);
+      const div = addRow(lighting, RgbZoneLocation[zone.location] ? humanize(RgbZoneLocation[zone.location]) : `Zone ${zone.index + 1}`);
+      const value = div.lastElementChild as HTMLElement;
 
-      const enabled = document.createElement('input');
+      const enabled = element('input');
       enabled.type = 'checkbox';
       enabled.checked = true;
 
-      const select = document.createElement('select');
+      const select = element('select');
       for (const effect of zone.effects) {
-        if (effect.id === RgbEffectId.Off || !RgbEffectId[effect.id]) {
+        const label = EFFECT_LABELS[effect.id];
+        if (!label) {
           continue;
         }
-        const option = document.createElement('option');
+        const option = element('option', undefined, label);
         option.value = effect.id.toString();
-        option.textContent = RgbEffectId[effect.id];
         select.appendChild(option);
       }
 
-      const color = document.createElement('input');
+      const color = element('input');
       color.type = 'color';
       color.value = '#00b4ff';
+      color.title = 'Color';
 
-      const period = document.createElement('input');
+      // Shown in seconds, sent in milliseconds
+      const period = element('input');
       period.type = 'number';
-      period.min = '1000';
-      period.max = '20000';
-      period.step = '500';
-      period.value = '5000';
-      period.title = 'Period (ms)';
+      period.min = '1';
+      period.max = '20';
+      period.step = '0.5';
+      period.value = '5';
+      const periodLabel = labeled('Speed', period, 's');
 
-      const intensity = document.createElement('input');
+      const intensity = element('input');
       intensity.type = 'range';
       intensity.min = '1';
       intensity.max = '100';
       intensity.value = '100';
-      intensity.title = 'Brightness';
+      const intensityLabel = labeled('Brightness', intensity);
 
       const saved = savedEffects[zone.index];
       if (saved) {
@@ -455,7 +484,7 @@ async function openHidppDevice(device: Hidpp) {
           color.value = `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
         }
         if ('period' in saved) {
-          period.value = saved.period.toString();
+          period.value = (saved.period / 1000).toString();
           intensity.value = (saved.intensity || 100).toString();
         }
       }
@@ -466,11 +495,12 @@ async function openHidppDevice(device: Hidpp) {
         }
         const hex = parseInt(color.value.slice(1), 16);
         const rgb = { r: hex >> 16, g: (hex >> 8) & 0xff, b: hex & 0xff };
+        const periodMs = Math.round(Math.min(Math.max(parseFloat(period.value) || 5, 1), 20) * 1000);
         switch (parseInt(select.value, 10)) {
           case RgbEffectId.Cycle:
-            return { id: RgbEffectId.Cycle, period: parseInt(period.value, 10), intensity: parseInt(intensity.value, 10) };
+            return { id: RgbEffectId.Cycle, period: periodMs, intensity: parseInt(intensity.value, 10) };
           case RgbEffectId.Breathing:
-            return { id: RgbEffectId.Breathing, color: rgb, period: parseInt(period.value, 10), intensity: parseInt(intensity.value, 10) };
+            return { id: RgbEffectId.Breathing, color: rgb, period: periodMs, intensity: parseInt(intensity.value, 10) };
           default:
             return { id: RgbEffectId.Static, color: rgb };
         }
@@ -480,8 +510,8 @@ async function openHidppDevice(device: Hidpp) {
         const id = parseInt(select.value, 10);
         select.disabled = !enabled.checked;
         color.hidden = !enabled.checked || id === RgbEffectId.Cycle;
-        period.hidden = !enabled.checked || id === RgbEffectId.Static;
-        intensity.hidden = !enabled.checked || id === RgbEffectId.Static;
+        periodLabel.hidden = !enabled.checked || id === RgbEffectId.Static;
+        intensityLabel.hidden = !enabled.checked || id === RgbEffectId.Static;
       };
       updateVisibility();
 
@@ -492,7 +522,7 @@ async function openHidppDevice(device: Hidpp) {
         if (profileAddress !== undefined) {
           const address = profileAddress;
           const effects = rows.map(row => row.buildEffect());
-          queueChange(details, () => onBoardProfile.writeProfileLeds(address, effects));
+          queueChange(lighting, () => onBoardProfile.writeProfileLeds(address, effects));
         }
       };
       const row = { enabled, select, color, period, intensity, buildEffect, updateVisibility, queue };
@@ -516,8 +546,7 @@ async function openHidppDevice(device: Hidpp) {
       period.oninput = onEdit;
       intensity.oninput = onEdit;
 
-      div.append(enabled, select, color, period, intensity);
-      details.appendChild(div);
+      value.append(labeled('', enabled, 'On'), select, color, periodLabel, intensityLabel);
     }
   } catch (e) { console.log(e); }
 
@@ -525,18 +554,14 @@ async function openHidppDevice(device: Hidpp) {
     const onBoardProfile = new OnBoardProfile(device);
     const mode = await onBoardProfile.getMode();
 
-    const details = document.createElement('details');
-    container.appendChild(details);
-
-    const summary = document.createElement('summary');
-    summary.textContent = `On Board Profile Mode: `;
-    details.appendChild(summary);
-
-    const select = document.createElement('select');
-    for (const value of [1, 2]) {
-      const option = document.createElement('option');
+    const MODE_LABELS: Record<number, string> = {
+      [OnBoardProfileMode.OnBoard]: 'On-board (settings saved on the mouse)',
+      [OnBoardProfileMode.Host]: 'Host (settings controlled by software)',
+    };
+    const select = element('select');
+    for (const value of [OnBoardProfileMode.OnBoard, OnBoardProfileMode.Host]) {
+      const option = element('option', undefined, MODE_LABELS[value]);
       option.value = value.toString();
-      option.textContent = OnBoardProfileMode[value];
       select.appendChild(option);
     }
     select.value = mode.toString();
@@ -544,49 +569,43 @@ async function openHidppDevice(device: Hidpp) {
       const value = parseInt(select.value, 10);
       queueChange(select, () => onBoardProfile.setMode(value));
     };
-    summary.appendChild(select);
-
+    addRow(profiles, 'Mode', select);
 
     const profilesInfo = await onBoardProfile.getProfilesInfo();
     const activeAddress = profilesInfo[await onBoardProfile.getCurrentProfile() - 1]?.address;
 
-    for (const profileInfo of profilesInfo) {
-      const details2 = document.createElement('details');
-      const summary = document.createElement('summary');
-      summary.textContent = `Profile ${profileInfo.address} (${profileInfo.enabled ? 'Enabled' : 'Disabled'}${profileInfo.address === activeAddress ? ', Active' : ''})`;
-      details2.appendChild(summary);
+    for (const [i, profileInfo] of profilesInfo.entries()) {
+      const details = element('details');
+      const active = profileInfo.address === activeAddress;
+      details.append(element(
+        'summary',
+        undefined,
+        `Profile ${i + 1}${active ? ' (active)' : profileInfo.enabled ? '' : ' (disabled)'}`
+      ));
+      profiles.append(details);
 
-      if (profileInfo.enabled) {
-        const profile = await onBoardProfile.readProfile(profileInfo.address);
-        console.log('profile', profileInfo.address, profile);
-        const div3 = document.createElement('div');
-        div3.textContent = `Report Rate: ${profile.reportRate}ms`;
-        details2.appendChild(div3);
-
-        const div4 = document.createElement('div');
-        div4.textContent = `DPI List: ${profile.dpi.filter(Boolean).map((x, i) => {
-          const attributes: string[] = [];
-          if (i === profile.defaultDpi) {
-            attributes.push('default');
-          }
-          if (i === profile.switchedDpi) {
-            attributes.push('switched');
-          }
-          return `${x}${attributes.length ? ` (${attributes.join(', ')})` : ''}`;
-        }).join(', ')}`;
-        details2.appendChild(div4);
-
-        if (profileInfo.address === activeAddress) {
-          const currentDpiIndex = await onBoardProfile.getCurrentDpiIndex();
-          const div5 = document.createElement('div');
-          div5.textContent = `Current DPI: ${profile.dpi[currentDpiIndex]}`;
-          details2.appendChild(div5);
-        }
+      if (!profileInfo.enabled) {
+        continue;
       }
 
-      details.appendChild(details2);
+      const profile = await onBoardProfile.readProfile(profileInfo.address);
+      addRow(details, 'Report rate', formatReportRate(profile.reportRate));
+      addRow(details, 'DPI steps', profile.dpi.filter(Boolean).map((x, i) =>
+        `${x}${i === profile.defaultDpi ? ' (default)' : ''}${i === profile.switchedDpi ? ' (shift)' : ''}`
+      ).join(', '));
+
+      if (active) {
+        const currentDpiIndex = await onBoardProfile.getCurrentDpiIndex();
+        addRow(details, 'Current DPI', `${profile.dpi[currentDpiIndex]}`);
+      }
     }
   } catch (e) { console.log(e); }
+
+  for (const section of [statusRows, performance, lighting, profiles]) {
+    if (section.childElementCount <= (section === statusRows ? 0 : 1)) {
+      section.remove();
+    }
+  }
 }
 
 async function openHidDevice(device: HIDDevice) {
