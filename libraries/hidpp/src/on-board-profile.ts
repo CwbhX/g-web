@@ -1,4 +1,20 @@
 import { Hidpp } from "./hidpp";
+import { decodeRgbEffect, encodeRgbEffectParams, RgbEffect } from "./rgb-effects";
+
+const PROFILE_LEDS_OFFSET = 208;
+const PROFILE_ALT_LEDS_OFFSET = 230;
+const PROFILE_LED_COUNT = 2;
+
+export function crc16Ccitt(data: Uint8Array): number {
+  let crc = 0xffff;
+  for (const byte of data) {
+    crc ^= byte << 8;
+    for (let i = 0; i < 8; i += 1) {
+      crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return crc;
+}
 
 export enum OnBoardProfileMode {
   NoChange = 0x0,
@@ -53,6 +69,9 @@ export class OnBoardProfile {
     return view[0];
   }
 
+  /**
+   * @returns 1-based index into `getProfilesInfo()`
+   */
   async getCurrentProfile(): Promise<number> {
     const { index: featureIndex } = await this.hidpp.getFeature(0x8100);
     const response = await this.hidpp.sendLongRequest(
@@ -60,7 +79,7 @@ export class OnBoardProfile {
       0x4
     );
     const view = new Uint8Array(response);
-    return view[0];
+    return view[1];
   }
 
   async readSector(sector: number, size: number) {
@@ -84,6 +103,55 @@ export class OnBoardProfile {
       }
     }
     return data.buffer;
+  }
+
+  /**
+   * Writes a whole sector, replacing its last two bytes with the CRC the device expects.
+   */
+  async writeSector(sector: number, data: ArrayBuffer) {
+    const { index: featureIndex } = await this.hidpp.getFeature(0x8100);
+    const size = data.byteLength;
+    const buffer = new Uint8Array(Math.ceil(size / 16) * 16);
+    buffer.set(new Uint8Array(data));
+    const crc = crc16Ccitt(buffer.subarray(0, size - 2));
+    buffer[size - 2] = crc >> 8;
+    buffer[size - 1] = crc & 0xff;
+
+    const start = new DataView(new ArrayBuffer(6));
+    start.setUint16(0, sector);
+    start.setUint16(2, 0);
+    start.setUint16(4, size);
+    await this.hidpp.sendLongRequest(featureIndex, 0x6, start.buffer);
+
+    for (let offset = 0; offset < size; offset += 16) {
+      await this.hidpp.sendLongRequest(
+        featureIndex,
+        0x7,
+        buffer.slice(offset, offset + 16).buffer
+      );
+    }
+
+    await this.hidpp.sendLongRequest(featureIndex, 0x8);
+  }
+
+  /**
+   * Replaces the lighting stored in a profile, one effect per zone.
+   */
+  async writeProfileLeds(address: number, effects: RgbEffect[]) {
+    if (effects.length > PROFILE_LED_COUNT) {
+      throw new Error(`Profiles only store ${PROFILE_LED_COUNT} lighting zones`);
+    }
+    const { sectorSize } = await this.getInfo();
+    const data = new Uint8Array(await this.readSector(address, sectorSize));
+    effects.forEach((effect, zone) => {
+      const encoded = new Uint8Array(1 + 10);
+      encoded[0] = effect.id;
+      encoded.set(new Uint8Array(encodeRgbEffectParams(effect)), 1);
+      // Main and alternate (power saving) slots
+      data.set(encoded, PROFILE_LEDS_OFFSET + zone * encoded.length);
+      data.set(encoded, PROFILE_ALT_LEDS_OFFSET + zone * encoded.length);
+    });
+    await this.writeSector(address, data.buffer);
   }
 
   async getProfilesInfo() {
@@ -125,6 +193,8 @@ export class OnBoardProfile {
       angleSnapping: view.getUint8(15),
       powerSaveTimeout: view.getUint8(26),
       powerOffTimeout: view.getUint8(27),
+      // One entry per lighting zone
+      leds: [decodeRgbEffect(view, PROFILE_LEDS_OFFSET), decodeRgbEffect(view, PROFILE_LEDS_OFFSET + 11)],
     };
   }
 

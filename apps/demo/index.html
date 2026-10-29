@@ -14,12 +14,25 @@
     details>summary {
       margin-left: -20px;
     }
+
+    #apply-bar {
+      position: sticky;
+      bottom: 0;
+      margin-top: 16px;
+      padding: 8px 0;
+      background: white;
+      border-top: 1px solid #ccc;
+    }
   </style>
 </head>
 
 <body>
   <button id="select-button">Select Device</button>
   <div id="root"></div>
+  <div id="apply-bar">
+    <button id="apply-button" disabled>Send to mouse</button>
+    <span id="apply-status"></span>
+  </div>
   <script type="module" src="./src/index.ts"></script>
 </body>
 

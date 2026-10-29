@@ -43,6 +43,8 @@ Current state:
 - [ ] Button mapping
 - [ ] Gesture
 - [ ] **R!G!B!**
+  - [x] 0x8071 RGB Effects (Off, Static, Cycle, Breathing)
+  - [ ] 0x8070 Color LED Effects
 
 ### Keyboard
 

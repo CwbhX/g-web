@@ -1,8 +1,48 @@
-import { AdjustableDpi, Battery, BatteryLevel1004, OnBoardProfile, BatteryStatus1000, BatteryStatus1001, BatteryStatus1f20, DeviceType, FeatureSet, FirmwareInfo, FirmwareType, Hidpp, isHidppDevice, Receiver, ReportRate, requestDevice, TypeAndName, OnBoardProfileMode } from "@yume-chan/hidpp";
+import { AdjustableDpi, Battery, BatteryLevel1004, OnBoardProfile, BatteryStatus1000, BatteryStatus1001, BatteryStatus1f20, DeviceType, FeatureSet, FirmwareInfo, FirmwareType, Hidpp, isHidppDevice, Receiver, ReportRate, requestDevice, TypeAndName, OnBoardProfileMode, RgbEffect, RgbEffectId, RgbEffects, RgbZoneLocation } from "@yume-chan/hidpp";
 
 const root = document.getElementById('root') as HTMLDivElement;
 
 const devices: HIDDevice[] = [];
+
+// Keyed by control, so changing the same control twice only sends the latest value
+const pendingChanges = new Map<HTMLElement, () => Promise<void>>();
+const applyButton = document.getElementById('apply-button') as HTMLButtonElement;
+const applyStatus = document.getElementById('apply-status') as HTMLSpanElement;
+
+function updateApplyButton() {
+  for (const control of Array.from(pendingChanges.keys())) {
+    if (!control.isConnected) {
+      pendingChanges.delete(control);
+    }
+  }
+  applyButton.disabled = pendingChanges.size === 0;
+  applyButton.textContent = pendingChanges.size
+    ? `Send to mouse (${pendingChanges.size} pending)`
+    : 'Send to mouse';
+}
+
+function queueChange(control: HTMLElement, apply: () => Promise<void>) {
+  pendingChanges.set(control, apply);
+  applyStatus.textContent = '';
+  updateApplyButton();
+}
+
+applyButton.onclick = async () => {
+  applyButton.disabled = true;
+  applyStatus.textContent = 'Sending...';
+  let failed = 0;
+  for (const [control, apply] of Array.from(pendingChanges)) {
+    try {
+      await apply();
+      pendingChanges.delete(control);
+    } catch (e) {
+      console.error(e);
+      failed += 1;
+    }
+  }
+  applyStatus.textContent = failed ? `${failed} change(s) failed, see console` : 'Sent';
+  updateApplyButton();
+};
 
 async function openHidppDevice(device: Hidpp) {
   await device.getVersion();
@@ -31,6 +71,7 @@ async function openHidppDevice(device: Hidpp) {
 
   device.onDisconnect(() => {
     container.remove();
+    updateApplyButton();
   });
 
   try {
@@ -265,9 +306,9 @@ async function openHidppDevice(device: Hidpp) {
         select.appendChild(option);
       }
       select.value = currentDpi.toString();
-      select.onchange = async () => {
-        console.log(select.value);
-        await dpi.setDpi(index, parseInt(select.value, 10));
+      select.onchange = () => {
+        const value = parseInt(select.value, 10);
+        queueChange(select, async () => { await dpi.setDpi(index, value); });
       };
 
       div.appendChild(select);
@@ -291,13 +332,142 @@ async function openHidppDevice(device: Hidpp) {
       select.appendChild(option);
     }
     select.value = currentReportRate.toString();
-    select.onchange = async () => {
-      console.log(select.value);
-      await reportRate.setReportRate(parseInt(select.value, 10));
+    select.onchange = () => {
+      const value = parseInt(select.value, 10);
+      queueChange(select, () => reportRate.setReportRate(value));
     };
 
     div.appendChild(select);
     container.appendChild(div);
+  } catch (e) { console.log(e); }
+
+  try {
+    const rgbEffects = new RgbEffects(device);
+    const zones = await rgbEffects.getZones();
+
+    // The device can't report its live effect, so start from the active on-board profile
+    const onBoardProfile = new OnBoardProfile(device);
+    let savedEffects: (RgbEffect | undefined)[] = [];
+    let profileAddress: number | undefined;
+    try {
+      if (await onBoardProfile.getMode() === OnBoardProfileMode.OnBoard) {
+        const profilesInfo = await onBoardProfile.getProfilesInfo();
+        profileAddress = profilesInfo[await onBoardProfile.getCurrentProfile() - 1]?.address;
+        if (profileAddress !== undefined) {
+          savedEffects = (await onBoardProfile.readProfile(profileAddress)).leds;
+        }
+      }
+    } catch (e) { console.log(e); }
+
+    const zoneEffects: (() => RgbEffect)[] = [];
+
+    const details = document.createElement('details');
+    details.open = true;
+    container.appendChild(details);
+
+    const summary = document.createElement('summary');
+    summary.textContent = 'Lighting';
+    details.appendChild(summary);
+
+    for (const zone of zones) {
+      const div = document.createElement('div');
+      div.append(`${RgbZoneLocation[zone.location] ?? `Zone ${zone.index}`}: `);
+
+      const enabled = document.createElement('input');
+      enabled.type = 'checkbox';
+      enabled.checked = true;
+
+      const select = document.createElement('select');
+      for (const effect of zone.effects) {
+        if (effect.id === RgbEffectId.Off || !RgbEffectId[effect.id]) {
+          continue;
+        }
+        const option = document.createElement('option');
+        option.value = effect.id.toString();
+        option.textContent = RgbEffectId[effect.id];
+        select.appendChild(option);
+      }
+
+      const color = document.createElement('input');
+      color.type = 'color';
+      color.value = '#00b4ff';
+
+      const period = document.createElement('input');
+      period.type = 'number';
+      period.min = '1000';
+      period.max = '20000';
+      period.step = '500';
+      period.value = '5000';
+      period.title = 'Period (ms)';
+
+      const intensity = document.createElement('input');
+      intensity.type = 'range';
+      intensity.min = '1';
+      intensity.max = '100';
+      intensity.value = '100';
+      intensity.title = 'Brightness';
+
+      const saved = savedEffects[zone.index];
+      if (saved) {
+        enabled.checked = saved.id !== RgbEffectId.Off;
+        if (saved.id !== RgbEffectId.Off) {
+          select.value = saved.id.toString();
+        }
+        if ('color' in saved) {
+          const { r, g, b } = saved.color;
+          color.value = `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+        }
+        if ('period' in saved) {
+          period.value = saved.period.toString();
+          intensity.value = (saved.intensity || 100).toString();
+        }
+      }
+
+      const buildEffect = (): RgbEffect => {
+        if (!enabled.checked) {
+          return { id: RgbEffectId.Off };
+        }
+        const hex = parseInt(color.value.slice(1), 16);
+        const rgb = { r: hex >> 16, g: (hex >> 8) & 0xff, b: hex & 0xff };
+        switch (parseInt(select.value, 10)) {
+          case RgbEffectId.Cycle:
+            return { id: RgbEffectId.Cycle, period: parseInt(period.value, 10), intensity: parseInt(intensity.value, 10) };
+          case RgbEffectId.Breathing:
+            return { id: RgbEffectId.Breathing, color: rgb, period: parseInt(period.value, 10), intensity: parseInt(intensity.value, 10) };
+          default:
+            return { id: RgbEffectId.Static, color: rgb };
+        }
+      };
+
+      const updateVisibility = () => {
+        const id = parseInt(select.value, 10);
+        select.disabled = !enabled.checked;
+        color.hidden = !enabled.checked || id === RgbEffectId.Cycle;
+        period.hidden = !enabled.checked || id === RgbEffectId.Static;
+        intensity.hidden = !enabled.checked || id === RgbEffectId.Static;
+      };
+      updateVisibility();
+
+      const queue = () => {
+        updateVisibility();
+        const effect = buildEffect();
+        queueChange(div, () => rgbEffects.setZoneEffect(zone, effect));
+        if (profileAddress !== undefined) {
+          const address = profileAddress;
+          const effects = zoneEffects.map(build => build());
+          queueChange(details, () => onBoardProfile.writeProfileLeds(address, effects));
+        }
+      };
+      zoneEffects.push(buildEffect);
+      enabled.onchange = queue;
+      select.onchange = queue;
+      color.oninput = queue;
+      period.oninput = queue;
+      intensity.oninput = queue;
+
+      div.append(enabled, select, color, period, intensity);
+      details.appendChild(div);
+    }
   } catch (e) { console.log(e); }
 
   try {
@@ -319,19 +489,20 @@ async function openHidppDevice(device: Hidpp) {
       select.appendChild(option);
     }
     select.value = mode.toString();
-    select.onchange = async () => {
-      await onBoardProfile.setMode(parseInt(select.value, 10));
+    select.onchange = () => {
+      const value = parseInt(select.value, 10);
+      queueChange(select, () => onBoardProfile.setMode(value));
     };
     summary.appendChild(select);
 
 
-    const currentProfile = await onBoardProfile.getCurrentProfile();
     const profilesInfo = await onBoardProfile.getProfilesInfo();
+    const activeAddress = profilesInfo[await onBoardProfile.getCurrentProfile() - 1]?.address;
 
     for (const profileInfo of profilesInfo) {
       const details2 = document.createElement('details');
       const summary = document.createElement('summary');
-      summary.textContent = `Profile ${profileInfo.address} (${profileInfo.enabled ? 'Enabled' : 'Disabled'}${profileInfo.address === currentProfile + 1 ? ', Active' : ''})`;
+      summary.textContent = `Profile ${profileInfo.address} (${profileInfo.enabled ? 'Enabled' : 'Disabled'}${profileInfo.address === activeAddress ? ', Active' : ''})`;
       details2.appendChild(summary);
 
       if (profileInfo.enabled) {
@@ -354,7 +525,7 @@ async function openHidppDevice(device: Hidpp) {
         }).join(', ')}`;
         details2.appendChild(div4);
 
-        if (profileInfo.address === currentProfile + 1) {
+        if (profileInfo.address === activeAddress) {
           const currentDpiIndex = await onBoardProfile.getCurrentDpiIndex();
           const div5 = document.createElement('div');
           div5.textContent = `Current DPI: ${profile.dpi[currentDpiIndex]}`;

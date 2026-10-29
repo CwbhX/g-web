@@ -7,4 +7,5 @@ export * from './hidpp';
 export * from './on-board-profile';
 export * from './receiver';
 export * from './report-rate';
+export * from './rgb-effects';
 export * from './type-and-name';
